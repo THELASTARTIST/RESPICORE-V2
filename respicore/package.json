@@ -1,11 +1,23 @@
 {
+  "name": "respicore",
+  "version": "2.0.0",
+  "description": "Acoustic Respiratory Triage Platform",
+  "author": "RespiCore Team",
+  "main": "electron/main.js",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "electron:dev": "cross-env NODE_ENV=development electron .",
+    "electron:prebuild": "npm run build",
+    "electron:build": "npm run build && cross-env NODE_ENV=production electron-builder --win"
   },
   "dependencies": {
+    "@capacitor/android": "^8.3.0",
+    "@capacitor/browser": "^8.0.3",
+    "@capacitor/cli": "^8.3.0",
+    "@capacitor/core": "^8.3.0",
     "@supabase/ssr": "^0.10.0",
     "@supabase/supabase-js": "^2.101.1",
     "next": "^15.2.2",
@@ -18,8 +30,46 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "astral-regex": "^2.0.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
     "postcss": "8.5",
     "tailwindcss": "^4.0.0",
     "typescript": "6.0.2"
+  },
+  "build": {
+    "appId": "com.respicore.app",
+    "productName": "RespiCore",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      ".next/standalone/**/*",
+      ".next/static/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": ".next/standalone",
+        "to": "app/.next/standalone"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }

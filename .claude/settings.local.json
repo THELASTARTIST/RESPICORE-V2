@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xxd \"D:/RESPICORE V.2/respicore/app/\\(auth\\)/login/page.tsx\")",
+      "Bash(find . -type f \\\\\\( -name \"*.tsx\" -o -name \"*.ts\" -not -path \"./.next/*\" -not -path \"./node_modules/*\" \\\\\\) -exec file {} \\\\;)",
+      "Bash(node -e ':*)",
+      "Bash(xxd lib/supabase/client.ts)",
+      "Bash(find . -type f \\\\\\( -name \"*.tsx\" -o -name \"*.ts\" \\\\\\) -not -path \"./.next/*\" -not -path \"./node_modules/*\" -exec file {} \\\\;)",
+      "Bash(npm -v)",
+      "WebSearch",
+      "Bash(npm install:*)",
+      "Bash(ls .env*)",
+      "Bash(ls postcss.config*)",
+      "Bash(npm run:*)",
+      "Bash(rm:*)",
+      "Read(//d/RESPICORE/**)",
+      "Bash(mkdir -p styles)",
+      "Bash(npx next:*)",
+      "Bash(PORT=3000 npx next dev)",
+      "Bash(netstat -ano)",
+      "Bash(findstr \":3000\")",
+      "Bash(taskkill:*)",
+      "Bash(next build:*)",
+      "Bash(npx electron-builder:*)",
+      "Bash(npx cap:*)",
+      "Bash(npm i:*)"
+    ]
+  }
+}

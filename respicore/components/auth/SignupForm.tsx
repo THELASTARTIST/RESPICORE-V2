@@ -13,6 +13,17 @@ export default function SignupForm() {
   const [success, setSuccess]     = useState(false);
   const [loading, setLoading]     = useState(false);
 
+  async function handleGoogleSignUp() {
+    setError(null);
+    const supabase = createClient();
+    await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback`,
+      },
+    });
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
