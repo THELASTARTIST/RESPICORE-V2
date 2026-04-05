@@ -3,7 +3,7 @@
   "appName": "RespiCore",
   "webDir": "www",
   "server": {
-    "url": "http://10.0.2.2:3000",
+    "url": "https://respicore-v20.vercel.app",
     "cleartext": true
   }
 }
