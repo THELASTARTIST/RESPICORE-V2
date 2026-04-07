@@ -42,6 +42,52 @@ const CONDITIONS = {
   },
 };
 
+// ── FFT magnitude spectrum (real input, returns half-spectrum magnitudes) ──
+function computeMagnitudeSpectrum(input: Float64Array): Float64Array {
+  const N = input.length;
+  const real = new Float64Array(input);
+  const imag = new Float64Array(N);
+
+  let j = 0;
+  for (let i = 0; i < N - 1; i++) {
+    if (i < j) {
+      [real[i], real[j]] = [real[j], real[i]];
+      [imag[i], imag[j]] = [imag[j], imag[i]];
+    }
+    let k = N >> 1;
+    while (k <= j) { j -= k; k >>= 1; }
+    j += k;
+  }
+
+  for (let len = 2; len <= N; len <<= 1) {
+    const halfLen = len >> 1;
+    const angle = (-2 * Math.PI) / len;
+    const wRe = Math.cos(angle);
+    const wIm = Math.sin(angle);
+    for (let i = 0; i < N; i += len) {
+      let curRe = 1, curIm = 0;
+      for (let k2 = 0; k2 < halfLen; k2++) {
+        const tRe = curRe * real[i + k2 + halfLen] - curIm * imag[i + k2 + halfLen];
+        const tIm = curRe * imag[i + k2 + halfLen] + curIm * real[i + k2 + halfLen];
+        real[i + k2 + halfLen] = real[i + k2] - tRe;
+        imag[i + k2 + halfLen] = imag[i + k2] - tIm;
+        real[i + k2] += tRe;
+        imag[i + k2] += tIm;
+        const newRe = curRe * wRe - curIm * wIm;
+        curIm = curRe * wIm + curIm * wRe;
+        curRe = newRe;
+      }
+    }
+  }
+
+  const half = N >> 1;
+  const magnitude = new Float64Array(half);
+  for (let i = 0; i < half; i++) {
+    magnitude[i] = Math.sqrt(real[i] * real[i] + imag[i] * imag[i]) / N;
+  }
+  return magnitude;
+}
+
 const FILL_MAP: Record<string, string> = {
   Normal: "fill-green",
   Anomalous: "fill-amber",
@@ -102,7 +148,6 @@ export default function LandingPage() {
       const { createClient: cc } = await import("@/lib/supabase/client");
       const supabase = cc();
 
-      // Fetch current session on mount
       const { data } = await supabase.auth.getSession();
       const u = data.session?.user;
       if (u) {
@@ -114,7 +159,6 @@ export default function LandingPage() {
         });
       }
 
-      // Subscribe to future auth state changes
       const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
         if (session?.user) {
           const meta = session.user.user_metadata || {};
@@ -154,15 +198,10 @@ export default function LandingPage() {
   const [sessionSeconds, setSessionSeconds] = useState(0);
   const loginTimeRef = useRef(0);
 
-  // Track session time
   useEffect(() => {
-    if (!user) {
-      setSessionSeconds(0);
-      return;
-    }
+    if (!user) { setSessionSeconds(0); return; }
     const interval = setInterval(() => {
-      const elapsed = Math.floor((Date.now() - loginTimeRef.current) / 1000);
-      setSessionSeconds(elapsed);
+      setSessionSeconds(Math.floor((Date.now() - loginTimeRef.current) / 1000));
     }, 1000);
     return () => clearInterval(interval);
   }, [!!user]);
@@ -282,8 +321,8 @@ export default function LandingPage() {
     reader.onload = async () => {
       try {
         const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const sampleRate = audioCtx.sampleRate;
         const audioBuffer = await audioCtx.decodeAudioData(reader.result as ArrayBuffer);
-        const sampleRate = audioBuffer.sampleRate;
         const rawData = audioBuffer.getChannelData(0);
 
         // Trim leading/trailing silence
@@ -311,191 +350,204 @@ export default function LandingPage() {
         const trimmed = rawData.slice(startIdx, endIdx);
         const duration = trimmed.length / sampleRate;
 
-        // ── Feature extraction ──
+        // ── Full-FFT feature extraction ──
+        const fftSize = 8192;
+        const numBands = 32;
+        const bandEnergies = new Array(numBands).fill(0);
 
-        // 1. Zero-crossing rate & dominant freq estimate
-        let zeroCrossings = 0;
-        for (let i = 1; i < trimmed.length; i++) {
-          if ((trimmed[i] >= 0) !== (trimmed[i - 1] >= 0)) zeroCrossings++;
-        }
-        const zcr = zeroCrossings / trimmed.length;
-        const dominantFreqHz = (zcr * sampleRate) / 2;
-
-        // 2. RMS energy
-        let rms = 0;
-        for (let i = 0; i < trimmed.length; i++) rms += trimmed[i] * trimmed[i];
-        rms = Math.sqrt(rms / trimmed.length);
-
-        // 3. Multi-frame FFT via AnalyserNode (real FFT, not a snapshot)
-        const fftSize = 4096;
-        const analyser = audioCtx.createAnalyser();
-        analyser.fftSize = fftSize;
-        analyser.smoothingTimeConstant = 0;
-
-        const bufferSource = audioCtx.createBufferSource();
-        bufferSource.buffer = audioBuffer;
-        bufferSource.connect(analyser);
-        // Don't connect to destination (user already heard the recording)
-
-        // Process multiple frames by seeking
         const numFrames = 8;
-        const hopSamples = Math.floor(trimmed.length / numFrames);
-        const freqBins = analyser.frequencyBinCount;
+        const frameLength = Math.floor(trimmed.length / numFrames);
+        const fc = numFrames;
 
-        let totalCentroid = 0;
-        let totalRolloff = 0;
-        let totalFlux = 0;
-        let frameCount = 0;
+        let centroidSum = 0;
+        let flatnessSum = 0;
+        let rolloffSum = 0;
+        let kurtosisSum = 0;
+        let fluxSum = 0;
+        let rmsSum = 0;
+        let prevMag: Float64Array | null = null;
 
-        // Energy in 8 frequency bands (0 to Nyquist)
-        const bandTotals = new Array(8).fill(0);
-        const bandCount = new Array(8).fill(0);
+        for (let frame = 0; frame < numFrames; frame++) {
+          const fStart = frame * frameLength;
+          const fEnd = Math.min(fStart + frameLength, trimmed.length);
+          if (fEnd - fStart < 512) continue;
 
-        let prevSpectrum: number[] | null = null;
+          const frameData = new Float32Array(trimmed.slice(fStart, fEnd));
 
-        for (let f = 0; f < numFrames; f++) {
-          // Create a short buffer from this frame position
-          const frameStart = startIdx + f * hopSamples;
-          const frameLen = Math.min(frameSize * 100, trimmed.length - f * (trimmed.length / numFrames));
-          const frameData = rawData.slice(frameStart, frameStart + frameLen);
+          // Apply Hann window
+          for (let i = 0; i < frameData.length; i++) {
+            frameData[i] *= 0.5 * (1 - Math.cos((2 * Math.PI * i) / frameData.length));
+          }
 
-          if (frameData.length < 100) continue;
+          // RMS
+          let fr = 0;
+          for (let i = 0; i < frameData.length; i++) fr += frameData[i] * frameData[i];
+          fr = Math.sqrt(fr / frameData.length);
+          rmsSum += fr;
 
-          const frameCtx = new OfflineAudioContext(1, frameData.length, sampleRate);
-          const frameBuf = frameCtx.createBuffer(1, frameData.length, sampleRate);
-          frameBuf.copyToChannel(frameData, 0);
+          // Zero-pad to FFT size
+          const fftInput = new Float64Array(fftSize);
+          const copyLen = Math.min(frameData.length, fftSize);
+          for (let i = 0; i < copyLen; i++) fftInput[i] = frameData[i];
 
-          const src = frameCtx.createBufferSource();
-          src.buffer = frameBuf;
-          const ana = frameCtx.createAnalyser();
-          ana.fftSize = Math.min(4096, frameData.length);
-          ana.smoothingTimeConstant = 0;
-          src.connect(ana);
-          // Render synchronously
-          await ana.context;// just ensure context exists
+          const mag = computeMagnitudeSpectrum(fftInput);
 
-          // Instead of offline, compute DCT-style features directly from frame
-          // Goertzel-style energy per band
-          const numBands = 8;
-          const maxIdxForDft = Math.min(512, frameData.length);
-          const bandEnergy = new Array(numBands).fill(0);
+          // Distribute into freq bands
+          const usableBins = Math.floor(mag.length * 0.6);
+          for (let b = 0; b < numBands; b++) {
+            const lo = Math.floor((b / numBands) * usableBins);
+            const hi = Math.floor(((b + 1) / numBands) * usableBins);
+            let e = 0;
+            for (let k = lo; k < hi; k++) e += mag[k];
+            bandEnergies[b] += e;
+          }
 
-          for (let k = 0; k < maxIdxForDft; k++) {
-            let re = 0, im = 0;
-            for (let n = 0; n < frameData.length; n += 2) { // skip every other for speed
-              const angle = (2 * Math.PI * k * n) / frameData.length;
-              re += frameData[n] * Math.cos(angle);
-              im -= frameData[n] * Math.sin(angle);
+          // Spectral centroid
+          let cNum = 0, cDen = 0;
+          for (let k = 0; k < mag.length; k++) {
+            const freq = (k * sampleRate) / fftSize;
+            cNum += freq * mag[k];
+            cDen += mag[k];
+          }
+          centroidSum += cDen > 0 ? cNum / cDen : 0;
+
+          // Spectral flatness
+          let lSum = 0, aSum = 0, cnt = 0;
+          for (let k = 0; k < mag.length; k++) {
+            if (mag[k] > 1e-15) {
+              lSum += Math.log(mag[k] + 1e-15);
+              aSum += mag[k];
+              cnt++;
             }
-            const mag = re * re + im * im;
-            const band = Math.min(numBands - 1, Math.floor((k / maxIdxForDft) * numBands));
-            bandEnergy[band] += mag;
+          }
+          if (cnt > 0) {
+            const geo = Math.exp(lSum / cnt);
+            flatnessSum += geo / (aSum / cnt + 1e-15);
           }
 
-          // Band distribution
-          let bandSum = bandEnergy.reduce((a, b) => a + b, 0) || 1;
-          for (let b = 0; b < numBands; b++) {
-            bandTotals[b] += bandEnergy[b] / bandSum;
-            bandCount[b]++;
+          // Spectral rolloff (85% energy)
+          let cumul = 0, ro = 0;
+          for (let k = 0; k < mag.length; k++) {
+            cumul += mag[k];
+            if (cumul >= 0.85 * aSum) { ro = (k * sampleRate) / fftSize; break; }
           }
+          rolloffSum += ro;
 
-          // Spectral centroid (from band approximation)
-          let wSum = 0, tMag = 0;
-          for (let b = 0; b < numBands; b++) {
-            const freqCenter = ((b + 0.5) / numBands) * (sampleRate / 2);
-            wSum += freqCenter * bandEnergy[b];
-            tMag += bandEnergy[b];
-          }
-          if (tMag > 0) {
-            totalCentroid += wSum / tMag;
-            frameCount++;
+          // Spectral kurtosis
+         	if (cDen > 0) {
+            let m2 = 0, m4 = 0;
+            const cent = cNum / cDen;
+            for (let k = 0; k < mag.length; k++) {
+              const freq = (k * sampleRate) / fftSize;
+              const w = mag[k] / cDen;
+              const d = freq - cent;
+              m2 += w * d * d;
+              m4 += w * d * d * d * d;
+            }
+            kurtosisSum += m2 > 0 ? m4 / (m2 * m2) : 0;
           }
 
           // Spectral flux
-          if (prevSpectrum) {
-            let flux = 0;
-            for (let b = 0; b < numBands; b++) {
-              const diff = bandEnergy[b] - prevSpectrum[b];
-              if (diff > 0) flux += diff;
+          if (prevMag) {
+            let fl = 0;
+            for (let k = 0; k < mag.length; k++) {
+              const diff = mag[k] - prevMag[k];
+              if (diff > 0) fl += diff;
             }
-            totalFlux += flux;
+            fluxSum += fl;
           }
-          prevSpectrum = bandEnergy;
+          prevMag = mag;
         }
 
         audioCtx.close();
 
-        // Compute averages
-        const avgCentroid = frameCount > 0 ? totalCentroid / frameCount : 0;
-        const avgFlux = frameCount > 0 ? totalFlux / frameCount : 0;
+        // Averages
+        const avgCentroid = centroidSum / fc;
+        const avgFlatness = flatnessSum / fc;
+        const avgRolloff = rolloffSum / fc;
+        const avgKurtosis = kurtosisSum / fc;
+        const avgFlux = fluxSum / Math.max(fc - 1, 1);
+        const avgRms = rmsSum / fc;
 
-        // Normalize band energies
-        const normBands = bandTotals.map((v, i) => {
-          const cnt = bandCount[i] || 1;
-          return v / cnt;
-        });
-        const nbSum = normBands.reduce((a, b) => a + b, 0) || 1;
-        const finalBands = normBands.map((v) => v / nbSum);
+        // Normalize bands
+        let bSum = bandEnergies.reduce((a: number, b: number) => a + b, 0) || 1;
+        const nb = bandEnergies.map((v: number) => v / bSum);
 
-        // Spectral flatness (geometric/arithmetic mean of bands)
-        const logSum = finalBands.reduce((acc: number, b: number) => acc + Math.log(b + 1e-10), 0);
-        const geoMean = Math.exp(logSum / 8);
-        const arithMean = finalBands.reduce((a: number, b: number) => a + b, 0) / 8;
-        const flatness = geoMean / (arithMean + 1e-10);
+        const lowBand = nb.slice(0, 6).reduce((a: number, b: number) => a + b, 0);
+        const midBand = nb.slice(6, 16).reduce((a: number, b: number) => a + b, 0);
+        const highBand = nb.slice(16, 26).reduce((a: number, b: number) => a + b, 0);
+        const veryHigh = nb.slice(26).reduce((a: number, b: number) => a + b, 0);
 
-        // Band groupings
-        const lowBand = finalBands[0] + finalBands[1] + finalBands[2];
-        const midBand = finalBands[2] + finalBands[3] + finalBands[4];
-        const highBand = finalBands[5] + finalBands[6] + finalBands[7];
+        // ── Voice detection (speech is NOT pathology) ──
+        const isVoice = avgCentroid > 80 && avgCentroid < 3500 && avgRms > 0.005;
 
-        // ── Classification (deterministic, no random) ──
+        // ── Classification ──
+        let normalScore = 0;
         let wheezeScore = 0;
         let copdScore = 0;
         let anomalousScore = 0;
-        let normalScore = 0;
 
-        // Wheeze: tonal (low flatness), energy in bands 2-4, dominant freq 200-600 Hz
-        if (midBand > 0.45 && flatness < 0.60) wheezeScore += 0.4;
-        if (dominantFreqHz > 200 && dominantFreqHz < 600 && rms > 0.02) wheezeScore += 0.3;
-        if (avgCentroid > 300 && avgCentroid < 800 && avgFlux < 0.10) wheezeScore += 0.25;
+        // ---- NORMAL ----
+        if (!isVoice) {
+          normalScore += 1.5;
+        } else {
+          normalScore += 0.3;
+          if (lowBand > 0.40) normalScore += 0.5;
+          if (avgCentroid > 100 && avgCentroid < 3000) normalScore += 0.4;
+          if (avgFlux < 0.35) normalScore += 0.3;
+          if (avgRolloff < 3500) normalScore += 0.25;
+          if (avgRms > 0.005 && avgRms < 0.40) normalScore += 0.2;
+          if (avgFlatness < 0.30) normalScore += 0.3;
+          if (midBand < 0.40) normalScore += 0.2;
+          if (highBand < 0.30) normalScore += 0.15;
+        }
 
-        // COPD: broadband (high flatness), high flux, low rolloff, low-mid energy
-        if (flatness > 0.70) copdScore += 0.3;
-        if (avgFlux > 0.10) copdScore += 0.25;
-        if (lowBand > 0.55 && highBand < 0.15 && rms < 0.12) copdScore += 0.25;
-        if (avgCentroid < 300) copdScore += 0.15;
+        // ---- WHEEZE ----
+        if (midBand > 0.30 && highBand > 0.12) wheezeScore += 0.35;
+        if (avgCentroid > 400 && avgCentroid < 4000) wheezeScore += 0.25;
+        if (avgFlatness > 0.12 && avgFlatness < 0.40) wheezeScore += 0.2;
+        if (avgRolloff > 1200 && avgRolloff < 5500) wheezeScore += 0.25;
+        if (avgFlux < 0.12 && avgCentroid > 300) wheezeScore += 0.3;
+        if (avgRms > 0.015) wheezeScore += 0.1;
 
-        // Anomalous: mixed spectrum, moderate features
-        if (flatness > 0.45 && flatness < 0.78) anomalousScore += 0.2;
-        if (avgCentroid > 150 && avgCentroid < 600) anomalousScore += 0.2;
-        if (avgFlux > 0.04 && avgFlux < 0.20) anomalousScore += 0.2;
-        if (rms > 0.015 && rms < 0.30) anomalousScore += 0.15;
+        // ---- COPD / BRONCHITIS ----
+        if (highBand > 0.18 && veryHigh > 0.06) copdScore += 0.35;
+        if (avgFlatness > 0.35) copdScore += 0.3;
+        if (avgFlux > 0.20) copdScore += 0.25;
+        if (avgRolloff > 2500) copdScore += 0.2;
+        if (avgCentroid > 1200 && avgCentroid < 5500) copdScore += 0.2;
+        if (avgKurtosis < 6) copdScore += 0.15;
 
-        // Normal: low flux, low centroid, concentrated low-band energy
-        if (avgFlux < 0.08 || frameCount === 0) normalScore += 0.25;
-        if (avgCentroid < 400 || frameCount === 0) normalScore += 0.2;
-        if (rms < 0.12) normalScore += 0.2;
-        if (lowBand > 0.50) normalScore += 0.15;
-        if (duration < 2) normalScore += 0.1; // very short recording
+        // ---- ANOMALOUS ----
+        if (avgCentroid > 150 && avgCentroid < 5000) anomalousScore += 0.15;
+        if (avgFlatness > 0.08 && avgFlatness < 0.55) anomalousScore += 0.15;
+        if (avgFlux > 0.04 && avgFlux < 0.55) anomalousScore += 0.15;
+        if (midBand > 0.15 && midBand < 0.55) anomalousScore += 0.1;
+        if (avgRolloff > 600 && avgRolloff < 5500) anomalousScore += 0.1;
+        if (highBand > 0.06 && highBand < 0.40) anomalousScore += 0.08;
+        // Strongly penalize when clearly normal speech
+        if (lowBand > 0.55 && avgFlatness < 0.25) anomalousScore -= 0.6;
+        if (isVoice && avgCentroid < 2000 && lowBand > 0.45) anomalousScore -= 0.4;
+        if (avgFlux < 0.15 && avgRolloff < 2500) anomalousScore -= 0.2;
 
-        // Ensure minimum baseline
-        wheezeScore = Math.max(wheezeScore, 0.05);
-        copdScore = Math.max(copdScore, 0.05);
-        anomalousScore = Math.max(anomalousScore, 0.05);
-        normalScore = Math.max(normalScore, 0.10);
+        // Small baseline
+        normalScore = Math.max(normalScore, 0.05);
+        wheezeScore = Math.max(wheezeScore, 0.02);
+        copdScore = Math.max(copdScore, 0.02);
+        anomalousScore = Math.max(anomalousScore, 0.02);
 
         // Softmax
-        const expW = Math.exp(wheezeScore * 3);
-        const expC = Math.exp(copdScore * 3);
-        const expA = Math.exp(anomalousScore * 3);
-        const expN = Math.exp(normalScore * 3);
-        const sumExp = expW + expC + expA + expN;
+        const expN = Math.exp(normalScore * 2.5);
+        const expW = Math.exp(wheezeScore * 2.5);
+        const expC = Math.exp(copdScore * 2.5);
+        const expA = Math.exp(anomalousScore * 2.5);
+        const sumExp = expN + expW + expC + expA;
 
         const confidences: Record<string, number> = {
+          Normal: expN / sumExp,
           Wheeze: expW / sumExp,
           "COPD / Bronchitis": expC / sumExp,
           Anomalous: expA / sumExp,
-          Normal: expN / sumExp,
         };
 
         // Determine winning class
@@ -505,13 +557,18 @@ export default function LandingPage() {
         }
 
         console.log("Audio features:", {
-          zcrHz: Math.round(dominantFreqHz),
-          rms: rms.toFixed(4),
+          isVoice,
+          avgRms: avgRms.toFixed(4),
           avgCentroid: Math.round(avgCentroid),
+          avgRolloff: Math.round(avgRolloff),
           avgFlux: avgFlux.toFixed(4),
-          flatness: flatness.toFixed(4),
-          bands: finalBands.map((v: number) => v.toFixed(3)),
-          scores: { wheeze: wheezeScore, copd: copdScore, anomalous: anomalousScore, normal: normalScore },
+          avgFlatness: avgFlatness.toFixed(4),
+          avgKurtosis: avgKurtosis.toFixed(2),
+          lowBand: lowBand.toFixed(3),
+          midBand: midBand.toFixed(3),
+          highBand: highBand.toFixed(3),
+          veryHigh: veryHigh.toFixed(3),
+          scores: { normal: normalScore.toFixed(3), wheeze: wheezeScore.toFixed(3), copd: copdScore.toFixed(3), anomalous: anomalousScore.toFixed(3) },
           result: maxClass,
           confidences: Object.fromEntries(
             Object.entries(confidences).map(([k, v]) => [k, (v * 100).toFixed(1)])
@@ -553,7 +610,7 @@ export default function LandingPage() {
     if (isRecording) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true },
+        audio: { sampleRate: 16000, channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
       });
       streamRef.current = stream;
       audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
@@ -568,7 +625,6 @@ export default function LandingPage() {
       analyserRef.current = analyser;
       dataArrayRef.current = new Uint8Array(analyser.frequencyBinCount);
 
-      // Start real waveform rendering from microphone data
       const drawRealWave = () => {
         const c = waveRef.current;
         if (!c) return;
@@ -612,7 +668,6 @@ export default function LandingPage() {
       };
       mediaRecorder.onstop = () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-        // Stop stream
         stream.getTracks().forEach((t) => t.stop());
         audioContext.close();
         analyzeAudio(audioBlob);
@@ -652,7 +707,6 @@ export default function LandingPage() {
   // ── Spectrogram effect ──
   useEffect(() => {
     if (showResults) {
-      // Defer to next frame so canvas is visible
       requestAnimationFrame(() => drawSpectrogram(resultCond));
     }
   }, [showResults, resultCond, drawSpectrogram]);
@@ -911,20 +965,17 @@ export default function LandingPage() {
           </div>
 
           <div className="triage-grid">
-            {/* Left: Recording card */}
             <div className={`triage-card ${isRecording ? "active-card" : ""}`} id="recordingCard">
               <div className="card-label">
                 <span className={isRecording ? "card-label-dot live" : "card-label-dot"} />
                 <span>{isRecording ? "Input · Recording" : "Input · Microphone"}</span>
               </div>
 
-              {/* Waveform */}
               <div className="waveform-box">
                 <canvas className="waveform-canvas" ref={waveRef} />
                 {!isRecording && <span className="waveform-idle" style={{ position: "absolute" }}>awaiting input...</span>}
               </div>
 
-              {/* Timer */}
               <div className="timer-display">
                 <div className="timer-ring-wrap">
                   <svg width="100" height="100" viewBox="0 0 100 100">
@@ -951,7 +1002,6 @@ export default function LandingPage() {
               </button>
             </div>
 
-            {/* Right: Results card */}
             <div className="results-card" id="resultsCard">
               <div className="card-label">
                 <span className="card-label-dot" />
@@ -1165,7 +1215,7 @@ export default function LandingPage() {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" /><polyline points="14 2 14 8 20 8" /></svg>
             <span className="mnav-label">Reports</span>
           </a>
-<button className="mnav-item" onClick={() => setDrawerOpen(true)}>
+          <button className="mnav-item" onClick={() => setDrawerOpen(true)}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="5" cy="12" r="1.5" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" /><circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none" /></svg>
             <span className="mnav-label">More</span>
           </button>
