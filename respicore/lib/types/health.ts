@@ -52,6 +52,16 @@ export interface HealthMetric {
 }
 
 // DTO used by the metric submission form
+export class TriageReport {
+  id: string;
+  user_id: string;
+  predicted_class: "normal" | "anomalous" | "wheeze" | "copd";
+  confidence: number;
+  probabilities: { normal: number; anomalous: number; wheeze: number; copd: number };
+  inference_ms: number | null;
+  created_at: string;
+}
+
 export interface MetricFormData {
   spo2?: number;
   heart_rate?: number;

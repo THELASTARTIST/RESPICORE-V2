@@ -587,6 +587,27 @@ export default function LandingPage() {
         setLastLatency(latency);
         setIsProcessing(false);
 
+        // Save to database if user is logged in
+        try {
+          await fetch("/api/triage-reports", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              predicted_class: matchedKey === "normal" ? "normal" : matchedKey === "anomalous" ? "anomalous" : matchedKey === "wheeze" ? "wheeze" : "copd",
+              confidence: confidences[maxClass],
+              probabilities: {
+                normal: confidences["Normal"] ?? 0,
+                anomalous: confidences["Anomalous"] ?? 0,
+                wheeze: confidences["Wheeze"] ?? 0,
+                copd: confidences["COPD / Bronchitis"] ?? 0,
+              },
+              inference_ms: latency,
+            }),
+          });
+        } catch (e) {
+          console.warn("Triage report save failed:", e);
+        }
+
         setHistory((prev) => [
           {
             time: new Date().toLocaleString(),

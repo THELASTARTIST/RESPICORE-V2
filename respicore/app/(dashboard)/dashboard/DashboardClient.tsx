@@ -11,12 +11,37 @@ import MetricCard from "@/components/dashboard/MetricCard";
 import MetricsChart from "@/components/dashboard/MetricsChart";
 import type { HealthMetric, Profile } from "@/lib/types/health";
 
+export type TriageReport = {
+  id: string;
+  user_id: string;
+  predicted_class: "normal" | "anomalous" | "wheeze" | "copd";
+  confidence: number;
+  probabilities: { normal: number; anomalous: number; wheeze: number; copd: number };
+  inference_ms: number | null;
+  created_at: string;
+};
+
 interface DashboardClientProps {
   user: { id: string; email: string };
   profile: Profile | null;
   initialMetrics: HealthMetric[];
   latestMetric: HealthMetric | null;
+  triageReports: TriageReport[];
 }
+
+const LABELS: Record<string, string> = {
+  normal: "Normal",
+  anomalous: "Anomalous",
+  wheeze: "Wheeze",
+  copd: "COPD / Bronchitis",
+};
+
+const CLASS_COLORS: Record<string, string> = {
+  normal: "text-green-400 border-green-500/30 bg-green-500/10",
+  anomalous: "text-amber-400 border-amber-500/30 bg-amber-500/10",
+  wheeze: "text-cyan-400 border-cyan-500/30 bg-cyan-500/10",
+  copd: "text-red-400 border-red-500/30 bg-red-500/10",
+};
 
 function spo2Status(v: number | null | undefined) {
   if (v == null) return "neutral" as const;
@@ -68,6 +93,7 @@ export default function DashboardClient({
   profile,
   initialMetrics,
   latestMetric,
+  triageReports,
 }: DashboardClientProps) {
   const router = useRouter();
   const [metrics, setMetrics] = useState<HealthMetric[]>(initialMetrics);
@@ -342,6 +368,83 @@ export default function DashboardClient({
             <MetricsChart metrics={metrics} />
           </div>
         </div>
+
+        {/* Triage Reports */}
+        <section>
+          <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-4">
+            Voice Triage Reports
+            {triageReports.length > 0 && (
+              <span className="ml-2 font-mono text-slate-600 normal-case">
+                &middot; {triageReports.length} total
+              </span>
+            )}
+          </h2>
+
+          {triageReports.length === 0 ? (
+            <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-8 text-center">
+              <p className="text-sm text-slate-500">
+                No triage reports yet. Record a voice triage on the homepage to see results here.
+              </p>
+            </div>
+          ) : (
+            <div className="bg-slate-800/40 border border-slate-700 rounded-xl overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="border-b border-slate-700">
+                  <tr>
+                    <th className="text-left py-3 px-4 text-xs text-slate-500 font-mono uppercase tracking-wider">Time</th>
+                    <th className="text-left py-3 px-4 text-xs text-slate-500 font-mono uppercase tracking-wider">Class</th>
+                    <th className="text-left py-3 px-4 text-xs text-slate-500 font-mono uppercase tracking-wider">Confidence</th>
+                    <th className="hidden sm:table-cell text-left py-3 px-4 text-xs text-slate-500 font-mono uppercase tracking-wider">Normal</th>
+                    <th className="hidden sm:table-cell text-left py-3 px-4 text-xs text-slate-500 font-mono uppercase tracking-wider">Anomalous</th>
+                    <th className="hidden sm:table-cell text-left py-3 px-4 text-xs text-slate-500 font-mono uppercase tracking-wider">Wheeze</th>
+                    <th className="hidden sm:table-cell text-left py-3 px-4 text-xs text-slate-500 font-mono uppercase tracking-wider">COPD</th>
+                    <th className="hidden sm:table-cell text-left py-3 px-4 text-xs text-slate-500 font-mono uppercase tracking-wider">Latency</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {triageReports.map((r) => {
+                    const cls = CLASS_COLORS[r.predicted_class] || "text-slate-400 border-slate-600 bg-slate-700/10";
+                    return (
+                      <tr key={r.id} className="border-b border-slate-800/50 hover:bg-slate-700/20 transition-colors">
+                        <td className="py-3 px-4 text-slate-400 font-mono text-xs whitespace-nowrap">
+                          {new Date(r.created_at).toLocaleString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-xs font-medium ${cls}`}>
+                            {LABELS[r.predicted_class] || "Unknown"}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-slate-300 font-mono text-xs">
+                          {(r.confidence * 100).toFixed(1)}%
+                        </td>
+                        <td className="hidden sm:table-cell py-3 px-4 text-emerald-400 font-mono text-xs">
+                          {(r.probabilities.normal * 100).toFixed(1)}%
+                        </td>
+                        <td className="hidden sm:table-cell py-3 px-4 text-amber-400 font-mono text-xs">
+                          {(r.probabilities.anomalous * 100).toFixed(1)}%
+                        </td>
+                        <td className="hidden sm:table-cell py-3 px-4 text-cyan-400 font-mono text-xs">
+                          {(r.probabilities.wheeze * 100).toFixed(1)}%
+                        </td>
+                        <td className="hidden sm:table-cell py-3 px-4 text-red-400 font-mono text-xs">
+                          {(r.probabilities.copd * 100).toFixed(1)}%
+                        </td>
+                        <td className="hidden sm:table-cell py-3 px-4 text-cyan-400 font-mono text-xs">
+                          {r.inference_ms != null ? `${r.inference_ms}ms` : "--"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
 
         {/* Future integrations callout */}
         <div className="border border-dashed border-slate-700 rounded-2xl p-6 flex gap-4 items-start">

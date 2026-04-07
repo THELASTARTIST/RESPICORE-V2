@@ -8,6 +8,16 @@ import { createClient } from "@/lib/supabase/server";
 import DashboardClient from "./DashboardClient";
 import type { HealthMetric, Profile } from "@/lib/types/health";
 
+export type TriageReport = {
+  id: string;
+  user_id: string;
+  predicted_class: "normal" | "anomalous" | "wheeze" | "copd";
+  confidence: number;
+  probabilities: { normal: number; anomalous: number; wheeze: number; copd: number };
+  inference_ms: number | null;
+  created_at: string;
+};
+
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
@@ -42,12 +52,24 @@ export default async function DashboardPage() {
   const initialMetrics: HealthMetric[] = metrics ?? [];
   const latestMetric = initialMetrics[0] ?? null;
 
+  // Fetch triage reports
+  const { data: reports } = await supabase
+    .from("triage_reports")
+    .select("*")
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: false })
+    .limit(50)
+    .returns<TriageReport[]>();
+
+  const triageReports: TriageReport[] = reports ?? [];
+
   return (
     <DashboardClient
       user={{ id: user.id, email: user.email ?? "" }}
       profile={profile ?? null}
       initialMetrics={initialMetrics}
       latestMetric={latestMetric}
+      triageReports={triageReports}
     />
   );
 }
