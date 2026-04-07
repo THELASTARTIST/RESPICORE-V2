@@ -23,7 +23,8 @@
       "Bash(next build:*)",
       "Bash(npx electron-builder:*)",
       "Bash(npx cap:*)",
-      "Bash(npm i:*)"
+      "Bash(npm i:*)",
+      "Bash(mkdir:*)"
     ]
   }
 }
