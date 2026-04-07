@@ -581,6 +581,18 @@ export default function LandingPage() {
         const condMap: Record<string, string> = { Normal: "normal", Anomalous: "anomalous", Wheeze: "wheeze", "COPD / Bronchitis": "copd" };
         const matchedKey = condMap[maxClass] || "normal";
 
+        // Extract downsampled waveform for comparison
+        const frameCount = 200;
+        const wfSamples = Math.floor(trimmed.length / frameCount);
+        const wfData: number[] = [];
+        for (let i = 0; i < frameCount; i++) {
+          let sum = 0;
+          const start = i * wfSamples;
+          const end = i < frameCount - 1 ? start + wfSamples : trimmed.length;
+          for (let j = start; j < end; j++) sum += trimmed[j];
+          wfData.push(sum / (end - start));
+        }
+
         setResultCond(matchedKey);
         setShowResults(true);
         setLastConfidence((confidences[maxClass] * 100).toFixed(1));
@@ -602,6 +614,8 @@ export default function LandingPage() {
                 copd: confidences["COPD / Bronchitis"] ?? 0,
               },
               inference_ms: latency,
+              waveform_data: wfData,
+              audio_duration: duration,
             }),
           });
         } catch (e) {

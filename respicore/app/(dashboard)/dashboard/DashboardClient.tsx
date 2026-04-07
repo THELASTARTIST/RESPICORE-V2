@@ -9,6 +9,7 @@ import { createClient } from "@/lib/supabase/client";
 import MetricForm from "@/components/dashboard/MetricForm";
 import MetricCard from "@/components/dashboard/MetricCard";
 import MetricsChart from "@/components/dashboard/MetricsChart";
+import TriageTrendsChart from "@/components/dashboard/TriageTrendsChart";
 import type { HealthMetric, Profile } from "@/lib/types/health";
 
 export type TriageReport = {
@@ -99,6 +100,7 @@ export default function DashboardClient({
   const [metrics, setMetrics] = useState<HealthMetric[]>(initialMetrics);
   const [latest, setLatest] = useState<HealthMetric | null>(latestMetric);
   const [fetching, setFetching] = useState(false);
+  const [compareIds, setCompareIds] = useState<(string | null)[]>([null, null]);
 
   const handleMetricAdded = useCallback(async () => {
     setFetching(true);
@@ -121,6 +123,46 @@ export default function DashboardClient({
     await supabase.auth.signOut();
     router.push("/login");
     router.refresh();
+  }
+
+  function toggleCompare(id: string) {
+    setCompareIds((prev) => {
+      if (prev[0] === id) return [null, prev[1]];
+      if (prev[1] === id) return [prev[0], null];
+      if (prev[0] == null) return [id, prev[1]];
+      if (prev[1] == null) return [prev[0], id];
+      return [id, null];
+    });
+  }
+
+  const comparerecords = triageReports.filter(
+    (r) => compareIds.includes(r.id)
+  );
+
+  function drawMiniWaveform(canvas: HTMLCanvasElement | null, data: number[], color: string) {
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const w = canvas.offsetWidth;
+    const h = canvas.offsetHeight;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, h);
+    if (!data.length) return;
+
+    const max = Math.max(...data.map(Math.abs), 0.001);
+    const mid = h / 2;
+    ctx.beginPath();
+    const step = w / (data.length - 1);
+    ctx.moveTo(0, mid - (data[0] / max) * mid * 0.9);
+    for (let i = 1; i < data.length; i++) {
+      ctx.lineTo(i * step, mid - (data[i] / max) * mid * 0.9);
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
   }
 
   const displayName =
@@ -369,6 +411,54 @@ export default function DashboardClient({
           </div>
         </div>
 
+        {/* Triage Report Charts */}
+        {triageReports.length > 0 && (
+          <section>
+            <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-4">
+              Triage Trends
+              <span className="ml-2 font-mono text-slate-600 normal-case">
+                &middot; {triageReports.length} reports
+              </span>
+            </h2>
+            <TriageTrendsChart reports={triageReports} />
+          </section>
+        )}
+
+        {/* Session Comparison */}
+        {triageReports.length >= 2 && (
+          <section>
+            <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-4">
+              Compare Sessions
+              {comparerecords.length === 2 && (
+                <span className="ml-2">
+                  <button
+                    onClick={() => setCompareIds([null, null])}
+                    className="text-xs text-slate-500 hover:text-white underline transition-colors"
+                  >
+                    Clear selection
+                  </button>
+                </span>
+              )}
+              {comparerecords.length < 2 && (
+                <span className="ml-2 font-mono text-slate-600 normal-case">
+                  click two rows to compare
+                </span>
+              )}
+            </h2>
+
+            {comparerecords.length === 2 ? (
+              <SessionComparison
+                recordA={comparerecords[0]}
+                recordB={comparerecords[1]}
+              />
+            ) : (
+              <p className="text-xs text-slate-500 italic">
+                Select two triage reports from the table below to compare them side by side.
+              </p>
+            )}
+          </section>
+        )}
+
         {/* Triage Reports */}
         <section>
           <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-4">
@@ -404,8 +494,9 @@ export default function DashboardClient({
                 <tbody>
                   {triageReports.map((r) => {
                     const cls = CLASS_COLORS[r.predicted_class] || "text-slate-400 border-slate-600 bg-slate-700/10";
+                    const isSelected = compareIds.includes(r.id);
                     return (
-                      <tr key={r.id} className="border-b border-slate-800/50 hover:bg-slate-700/20 transition-colors">
+                      <tr key={r.id} className={`border-b border-slate-800/50 transition-colors ${isSelected ? "bg-cyan-500/10 cursor-pointer" : "hover:bg-slate-700/20 cursor-pointer"}`} onClick={() => toggleCompare(r.id)}>
                         <td className="py-3 px-4 text-slate-400 font-mono text-xs whitespace-nowrap">
                           {new Date(r.created_at).toLocaleString("en-US", {
                             month: "short",
@@ -475,6 +566,88 @@ export default function DashboardClient({
           </div>
         </div>
       </main>
+    </div>
+  );
+}
+
+interface SessionComparisonProps {
+  recordA: TriageReport;
+  recordB: TriageReport;
+}
+
+function SessionComparison({ recordA, recordB }: SessionComparisonProps) {
+  const classes: [TriageReport, TriageReport] = [recordA, recordB];
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {classes.map((r, i) => (
+          <div key={r.id} className="bg-slate-800/40 border border-slate-700 rounded-xl p-5 space-y-2">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-mono text-slate-500">
+                {i === 0 ? "Session A" : "Session B"}
+              </span>
+              <span className="text-xs font-mono text-slate-600">
+                {new Date(r.created_at).toLocaleString("en-US", {
+                  month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+                })}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-xs font-medium ${CLASS_COLORS[r.predicted_class] || "text-slate-400 border-slate-600 bg-slate-700/10"}`}>
+                {LABELS[r.predicted_class]}
+              </span>
+              <span className="text-xs font-mono text-slate-400">
+                {(r.confidence * 100).toFixed(1)}% conf
+              </span>
+            </div>
+            <div className="space-y-1.5">
+              {(["normal", "anomalous", "wheeze", "copd"] as const).map((cls) => {
+                const pct = r.probabilities[cls] * 100;
+                const colorMap: Record<string, string> = {
+                  normal: "bg-emerald-400",
+                  anomalous: "bg-amber-400",
+                  wheeze: "bg-cyan-400",
+                  copd: "bg-red-400",
+                };
+                return (
+                  <div key={cls} className="flex items-center gap-2">
+                    <span className="text-[10px] font-mono text-slate-500 w-[70px] capitalize">{cls}</span>
+                    <div className="flex-1 h-2 bg-slate-700/50 rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full transition-all ${colorMap[cls]}`} style={{ width: `${pct}%` }} />
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-400 w-[36px] text-right">
+                      {pct.toFixed(1)}%
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            {r.inference_ms != null && (
+              <p className="text-xs font-mono text-slate-600">Inference: {r.inference_ms}ms</p>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className="bg-cyan-500/5 border border-cyan-500/20 rounded-xl px-5 py-4 flex flex-wrap gap-x-6 gap-y-2 text-xs font-mono">
+        <span className="text-slate-400">Confidence delta:</span>
+        <span
+          className={
+            Math.abs(recordA.confidence - recordB.confidence) > 0.15
+              ? "text-amber-400 font-bold"
+              : "text-emerald-400"
+          }
+        >
+          {((recordA.confidence - recordB.confidence) * 100).toFixed(1)}pp
+        </span>
+        {recordA.predicted_class !== recordB.predicted_class && (
+          <span className="text-red-400 font-bold">Class changed: {LABELS[recordA.predicted_class]} &rarr; {LABELS[recordB.predicted_class]}</span>
+        )}
+        {recordA.predicted_class === recordB.predicted_class && (
+          <span className="text-emerald-400">Same classification</span>
+        )}
+      </div>
     </div>
   );
 }

@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { predicted_class, confidence, probabilities, inference_ms } = body;
+  const { predicted_class, confidence, probabilities, inference_ms, waveform_data, audio_duration } = body;
   if (!predicted_class || confidence == null) {
     return NextResponse.json({ error: "predicted_class and confidence required" }, { status: 400 });
   }
@@ -30,6 +30,8 @@ export async function POST(request: NextRequest) {
       confidence: parseFloat(confidence) || 0,
       probabilities: probabilities ?? {},
       inference_ms: inference_ms ?? null,
+      waveform_data: waveform_data ?? [],
+      audio_duration: audio_duration ?? null,
     })
     .select()
     .single();

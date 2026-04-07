@@ -7,9 +7,12 @@
 ## Features
 
 - **Live Triage Demo** — record audio via microphone, see real-time waveform visualization, and get instant classification results with a Mel-spectrogram output
-- **Audio Analysis Pipeline** — silence trimming, spectral denoising, FFT-based feature extraction, and softmax classification across 4 classes (Normal, Anomalous, Wheeze, COPD/Bronchitis)
+- **Audio Analysis Pipeline** — silence trimming, spectral denoising, FFT-based feature extraction, and softmax classification across 4 classes (Normal, Anomalous, Wheeze, COPD)
+- **Triage Report Storage** — reports are persisted to Supabase with user-level Row-Level Security for privacy
+- **Triage Trends Dashboard** — charts tracking classification confidence and class probabilities over time
+- **Session Comparison** — side-by-side probability comparison between any two triage reports
+- **Dashboard with Report History** — view health metrics, past triage reports, and session data with charts
 - **Authentication** — Google OAuth + Guest mode via Supabase
-- **Dashboard** — view health metrics and session data
 - **About & Reviews pages** — project story, team info, and community review system
 - **Responsive Design** — dark theme, mobile drawer navigation, bottom tab bar
 - **Offline-First** — all audio analysis runs in-browser via Web Audio API, no model uploads to any server
