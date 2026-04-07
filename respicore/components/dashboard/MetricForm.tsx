@@ -69,7 +69,7 @@ export default function MetricForm({ onSuccess }: MetricFormProps) {
       <h2 className="text-lg font-semibold text-white mb-1">Log Today&apos;s Reading</h2>
       <p className="text-sm text-slate-400 mb-6">Fill in any metrics you have available.</p>
 
-      <form onSubmit={handleSubmit} className="space-y-5">
+      <form onSubmit={handleSubmit} className="space-y-5" suppressHydrationWarning>
         {error && (
           <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3 text-sm text-red-400">
             {error}

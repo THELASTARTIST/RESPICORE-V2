@@ -104,3 +104,56 @@ export interface ApiError {
 }
 
 export type ApiResponse<T> = ApiSuccess<T> | ApiError;
+
+export interface MedicationLog {
+  id: string;
+  user_id: string;
+  medication_type: string;
+  medication_name: string | null;
+  dosage: string;
+  notes: string | null;
+  puff_count: number | null;
+  taken_at: string;
+  created_at: string;
+}
+
+export interface VoiceBiomarker {
+  cough_count: number | null;
+  hoarseness_index: number | null;
+  breathing_duration_secs: number | null;
+}
+
+export interface PersonalBaseline {
+  spo2_mean: number;
+  spo2_std: number;
+  spo2_min: number;
+  spo2_max: number;
+  heart_rate_mean: number;
+  heart_rate_std: number;
+  heart_rate_range: [number, number];
+  symptom_score_mean: number;
+  n_readings: number;
+  computed_at: string;
+}
+
+export interface SleepDisruptionReport {
+  week_start: string;
+  week_end: string;
+  n_night_meds: number;
+  n_rescue_inhaler_nights: number;
+  avg_morning_spo2_all: number;
+  avg_morning_spo2_after_meds: number;
+  spo2_delta_pct: number;
+  avg_morning_symptom_all: number;
+  avg_morning_symptom_after_meds: number;
+  summary: string;
+}
+
+export interface RescueInhalerStats {
+  total_puffs_week: number;
+  total_puffs_last_week: number;
+  days_with_usage_week: number;
+  trend: "increasing" | "stable" | "decreasing";
+  gina_flag: boolean;
+  daily_breakdown: { date: string; puffs: number }[];
+}

@@ -2,7 +2,7 @@
 // app/(dashboard)/dashboard/DashboardClient.tsx
 // Client Component island for the dashboard.
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
@@ -10,6 +10,20 @@ import MetricForm from "@/components/dashboard/MetricForm";
 import MetricCard from "@/components/dashboard/MetricCard";
 import MetricsChart from "@/components/dashboard/MetricsChart";
 import TriageTrendsChart from "@/components/dashboard/TriageTrendsChart";
+import AlertBanner from "@/components/dashboard/AlertBanner";
+import ExportButton from "@/components/dashboard/ExportButton";
+import BreathingExercise from "@/components/dashboard/BreathingExercise";
+import MedicationHistory, { type MedicationLog } from "@/components/dashboard/MedicationHistory";
+import MedicationForm from "@/components/dashboard/MedicationForm";
+import VoiceBiomarkerSparklines from "@/components/dashboard/VoiceBiomarkerSparklines";
+import SleepDisruptionCards from "@/components/dashboard/SleepDisruptionCard";
+import RescueInhalerTracker from "@/components/dashboard/RescueInhalerTracker";
+import PersonalBaselineCard from "@/components/dashboard/PersonalBaselineCard";
+import WeeklyReportViewer from "@/components/dashboard/WeeklyReportViewer";
+import { computeHealthAlerts } from "@/lib/alerts";
+import { computeSleepDisruption } from "@/lib/sleep_analysis";
+import { computePersonalBaseline, computeBaselineAlerts } from "@/lib/baseline";
+import { computeRescueInhalerStats } from "@/lib/inhaler_tracker";
 import type { HealthMetric, Profile } from "@/lib/types/health";
 
 export type TriageReport = {
@@ -19,6 +33,9 @@ export type TriageReport = {
   confidence: number;
   probabilities: { normal: number; anomalous: number; wheeze: number; copd: number };
   inference_ms: number | null;
+  cough_count: number | null;
+  hoarseness_index: number | null;
+  breathing_duration_secs: number | null;
   created_at: string;
 };
 
@@ -28,6 +45,7 @@ interface DashboardClientProps {
   initialMetrics: HealthMetric[];
   latestMetric: HealthMetric | null;
   triageReports: TriageReport[];
+  initialMeds: MedicationLog[];
 }
 
 const LABELS: Record<string, string> = {
@@ -95,21 +113,63 @@ export default function DashboardClient({
   initialMetrics,
   latestMetric,
   triageReports,
+  initialMeds,
 }: DashboardClientProps) {
   const router = useRouter();
   const [metrics, setMetrics] = useState<HealthMetric[]>(initialMetrics);
   const [latest, setLatest] = useState<HealthMetric | null>(latestMetric);
   const [fetching, setFetching] = useState(false);
   const [compareIds, setCompareIds] = useState<(string | null)[]>([null, null]);
+  const [triageData, setTriageData] = useState<TriageReport[]>(triageReports);
+  const [medications, setMedications] = useState<MedicationLog[]>(initialMeds ?? []);
+  const [showExercise, setShowExercise] = useState(false);
+  const [weeklyReport, setWeeklyReport] = useState<any>(null);
+
+  // Fetch fresh data on mount for real-time update
+  useEffect(() => {
+    async function fetchFresh() {
+      try {
+        const [metricsRes, triageRes, medsRes] = await Promise.all([
+          fetch("/api/health-metrics?limit=50"),
+          fetch("/api/triage-reports?limit=50"),
+          fetch("/api/medications?limit=50"),
+        ]);
+        const metricsJson = await metricsRes.json();
+        const triageJson = await triageRes.json();
+        const medsJson = await medsRes.json();
+        if (metricsJson.data) {
+          setMetrics(metricsJson.data);
+          setLatest(metricsJson.data[0] ?? null);
+        }
+        if (triageJson.data) {
+          setTriageData(triageJson.data);
+        }
+        if (medsJson.data) {
+          setMedications(medsJson.data);
+        }
+      } catch (err) {
+        console.error("Fresh fetch failed:", err);
+      }
+    }
+    fetchFresh();
+  }, []);
 
   const handleMetricAdded = useCallback(async () => {
     setFetching(true);
     try {
-      const res = await fetch("/api/health-metrics?limit=50");
-      const json = await res.json();
-      if (json.data) {
-        setMetrics(json.data);
-        setLatest(json.data[0] ?? null);
+      const [metricsRes, triageRes] = await Promise.all([
+        fetch("/api/health-metrics?limit=50"),
+        fetch("/api/triage-reports?limit=50"),
+      ]);
+      const metricsJson = await metricsRes.json();
+      const triageJson = await triageRes.json();
+      if (metricsJson.data) {
+        setMetrics(metricsJson.data);
+        setLatest(metricsJson.data[0] ?? null);
+      }
+      if (triageJson.data) {
+        setTriageData(triageJson.data);
+        setCompareIds([null, null]);
       }
     } catch (err) {
       console.error("Refetch failed:", err);
@@ -117,6 +177,29 @@ export default function DashboardClient({
       setFetching(false);
     }
   }, []);
+
+  const handleMedicationAdded = useCallback(async () => {
+    try {
+      const res = await fetch("/api/medications?limit=50");
+      const json = await res.json();
+      if (json.data) setMedications(json.data);
+    } catch (err) {
+      console.error("Medication refetch failed:", err);
+    }
+  }, []);
+
+  function handleExerciseComplete(totalSeconds: number) {
+    setShowExercise(false);
+    // Log breathing exercise as a metric entry
+    fetch("/api/health-metrics", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        breathing_exercise_done: true,
+        exercise_duration_mins: Math.round(totalSeconds / 60),
+      }),
+    }).then(() => handleMetricAdded());
+  }
 
   async function handleLogout() {
     const supabase = createClient();
@@ -135,7 +218,7 @@ export default function DashboardClient({
     });
   }
 
-  const comparerecords = triageReports.filter(
+  const comparerecords = triageData.filter(
     (r) => compareIds.includes(r.id)
   );
 
@@ -171,8 +254,43 @@ export default function DashboardClient({
     (m) => m.breathing_exercise_done
   ).length;
 
+  // ═══════════════════════════════════════════════
+  // NEW FEATURE: Personal Baseline Detection
+  // ═══════════════════════════════════════════════
+  const baseline = useMemo(() => computePersonalBaseline(metrics), [metrics]);
+  const baselineAlerts = useMemo(
+    () => (baseline ? computeBaselineAlerts(baseline, metrics) : []),
+    [baseline, metrics]
+  );
+  const allAlerts = useMemo(() => {
+    const health = computeHealthAlerts(metrics);
+    return [...health, ...baselineAlerts];
+  }, [metrics, baselineAlerts]);
+
+  // ═══════════════════════════════════════════════
+  // NEW FEATURE: Sleep Disruption Index
+  // ═══════════════════════════════════════════════
+  const sleepReports = useMemo(
+    () => computeSleepDisruption(metrics, medications),
+    [metrics, medications]
+  );
+
+  // ═══════════════════════════════════════════════
+  // NEW FEATURE: Rescue Inhaler Tracker
+  // ═══════════════════════════════════════════════
+  const inhalerStats = useMemo(
+    () => computeRescueInhalerStats(medications),
+    [medications]
+  );
+
+  // Render time-based greeting only after client hydration to avoid SSR mismatch
+  const [greeting, setGreeting] = useState<string | null>(null);
+  useEffect(() => {
+    setGreeting(getTimeGreeting());
+  }, []);
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-950/30 to-slate-900">
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-950/30 to-slate-900" suppressHydrationWarning>
       {/* Nav */}
       <nav className="sticky top-0 z-50 border-b border-slate-700/60 bg-slate-900/80 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
@@ -243,13 +361,16 @@ export default function DashboardClient({
         {/* Welcome */}
         <div>
           <h1 className="text-2xl font-bold text-white">
-            Good {getTimeGreeting()},{" "}
+            Good {greeting ?? "..."},{" "}
             <span className="text-cyan-400">{displayName}</span>
           </h1>
           <p className="text-slate-400 text-sm mt-1">
             Your respiratory health overview for the last 30 days.
           </p>
         </div>
+
+        {/* Trend Alerts */}
+        <AlertBanner alerts={allAlerts} />
 
         {/* Stat cards */}
         <section>
@@ -412,20 +533,20 @@ export default function DashboardClient({
         </div>
 
         {/* Triage Report Charts */}
-        {triageReports.length > 0 && (
+        {triageData.length > 0 && (
           <section>
             <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-4">
               Triage Trends
               <span className="ml-2 font-mono text-slate-600 normal-case">
-                &middot; {triageReports.length} reports
+                &middot; {triageData.length} reports
               </span>
             </h2>
-            <TriageTrendsChart reports={triageReports} />
+            <TriageTrendsChart reports={triageData} />
           </section>
         )}
 
         {/* Session Comparison */}
-        {triageReports.length >= 2 && (
+        {triageData.length >= 2 && (
           <section>
             <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-4">
               Compare Sessions
@@ -459,18 +580,26 @@ export default function DashboardClient({
           </section>
         )}
 
+        {/* Voice Biomarker Sparklines */}
+        {triageData.length > 0 && (
+          <VoiceBiomarkerSparklines reports={triageData} />
+        )}
+
+        {/* Personal Baseline */}
+        <PersonalBaselineCard baseline={baseline} />
+
         {/* Triage Reports */}
         <section>
           <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-4">
             Voice Triage Reports
-            {triageReports.length > 0 && (
+            {triageData.length > 0 && (
               <span className="ml-2 font-mono text-slate-600 normal-case">
-                &middot; {triageReports.length} total
+                &middot; {triageData.length} total
               </span>
             )}
           </h2>
 
-          {triageReports.length === 0 ? (
+          {triageData.length === 0 ? (
             <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-8 text-center">
               <p className="text-sm text-slate-500">
                 No triage reports yet. Record a voice triage on the homepage to see results here.
@@ -488,11 +617,14 @@ export default function DashboardClient({
                     <th className="hidden sm:table-cell text-left py-3 px-4 text-xs text-slate-500 font-mono uppercase tracking-wider">Anomalous</th>
                     <th className="hidden sm:table-cell text-left py-3 px-4 text-xs text-slate-500 font-mono uppercase tracking-wider">Wheeze</th>
                     <th className="hidden sm:table-cell text-left py-3 px-4 text-xs text-slate-500 font-mono uppercase tracking-wider">COPD</th>
+                    <th className="hidden md:table-cell text-left py-3 px-4 text-xs text-slate-500 font-mono uppercase tracking-wider">Cough</th>
+                    <th className="hidden md:table-cell text-left py-3 px-4 text-xs text-slate-500 font-mono uppercase tracking-wider">Hoarseness</th>
+                    <th className="hidden md:table-cell text-left py-3 px-4 text-xs text-slate-500 font-mono uppercase tracking-wider">Duration</th>
                     <th className="hidden sm:table-cell text-left py-3 px-4 text-xs text-slate-500 font-mono uppercase tracking-wider">Latency</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {triageReports.map((r) => {
+                  {triageData.map((r) => {
                     const cls = CLASS_COLORS[r.predicted_class] || "text-slate-400 border-slate-600 bg-slate-700/10";
                     const isSelected = compareIds.includes(r.id);
                     return (
@@ -525,6 +657,15 @@ export default function DashboardClient({
                         <td className="hidden sm:table-cell py-3 px-4 text-red-400 font-mono text-xs">
                           {(r.probabilities.copd * 100).toFixed(1)}%
                         </td>
+                        <td className="hidden md:table-cell py-3 px-4 text-orange-400 font-mono text-xs">
+                          {r.cough_count != null ? r.cough_count : "--"}
+                        </td>
+                        <td className="hidden md:table-cell py-3 px-4 text-purple-400 font-mono text-xs">
+                          {r.hoarseness_index != null ? r.hoarseness_index.toFixed(2) : "--"}
+                        </td>
+                        <td className="hidden md:table-cell py-3 px-4 text-green-400 font-mono text-xs">
+                          {r.breathing_duration_secs != null ? `${r.breathing_duration_secs.toFixed(0)}s` : "--"}
+                        </td>
                         <td className="hidden sm:table-cell py-3 px-4 text-cyan-400 font-mono text-xs">
                           {r.inference_ms != null ? `${r.inference_ms}ms` : "--"}
                         </td>
@@ -535,6 +676,68 @@ export default function DashboardClient({
               </table>
             </div>
           )}
+        </section>
+
+        {/* Breathing Exercise + Export */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <button
+            onClick={() => setShowExercise(true)}
+            className="inline-flex items-center gap-2 text-xs text-slate-400 hover:text-white border border-slate-700 hover:border-slate-500 px-3 py-1.5 rounded-lg transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+            </svg>
+            Start Exercise
+          </button>
+          <ExportButton />
+        </div>
+
+        {/* Sleep Disruption Index */}
+        {sleepReports.length > 0 && (
+          <SleepDisruptionCards reports={sleepReports} />
+        )}
+
+        {/* Rescue Inhaler Efficiency Tracker */}
+        {inhalerStats && inhalerStats.total_puffs_week > 0 ? (
+          <RescueInhalerTracker stats={inhalerStats} />
+        ) : (
+          <section>
+            <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-4">
+              Rescue Inhaler Tracker
+            </h2>
+            <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-6 text-center">
+              <p className="text-sm text-slate-500">
+                Start logging rescue inhaler medications. Puffs will be tracked automatically.
+              </p>
+              <p className="text-xs text-slate-600 mt-1">
+                GINA guidelines flag {"\u003e"}4 days/week of rescue use as uncontrolled.
+              </p>
+            </div>
+          </section>
+        )}
+
+        {/* Medication Tracker */}
+        <section>
+          <h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-4">
+            Medication Tracker
+            {medications.length > 0 && (
+              <span className="ml-2 font-mono text-slate-600 normal-case">
+                &middot; {medications.length} entries
+              </span>
+            )}
+          </h2>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-1">
+              <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-4">
+                <MedicationForm onSuccess={handleMedicationAdded} />
+              </div>
+            </div>
+            <div className="lg:col-span-2">
+              <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-4">
+                <MedicationHistory medications={medications} onDeleted={handleMedicationAdded} />
+              </div>
+            </div>
+          </div>
         </section>
 
         {/* Future integrations callout */}
@@ -565,6 +768,14 @@ export default function DashboardClient({
             </p>
           </div>
         </div>
+
+        {/* Breathing Exercise Modal */}
+        {showExercise && (
+          <BreathingExercise
+            onComplete={handleExerciseComplete}
+            onClose={() => setShowExercise(false)}
+          />
+        )}
       </main>
     </div>
   );

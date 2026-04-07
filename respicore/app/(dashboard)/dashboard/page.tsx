@@ -6,7 +6,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import DashboardClient from "./DashboardClient";
-import type { HealthMetric, Profile } from "@/lib/types/health";
+import type { HealthMetric, MedicationLog, Profile } from "@/lib/types/health";
 
 export type TriageReport = {
   id: string;
@@ -15,6 +15,9 @@ export type TriageReport = {
   confidence: number;
   probabilities: { normal: number; anomalous: number; wheeze: number; copd: number };
   inference_ms: number | null;
+  cough_count: number | null;
+  hoarseness_index: number | null;
+  breathing_duration_secs: number | null;
   created_at: string;
 };
 
@@ -63,6 +66,18 @@ export default async function DashboardPage() {
 
   const triageReports: TriageReport[] = reports ?? [];
 
+  // Fetch medication logs
+  const { data: medsData } = await supabase
+    .from("medications_log")
+    .select("*")
+    .eq("user_id", user.id)
+    .gte("taken_at", thirtyDaysAgo.toISOString())
+    .order("taken_at", { ascending: false })
+    .limit(50)
+    .returns<MedicationLog[]>();
+
+  const initialMeds: MedicationLog[] = medsData ?? [];
+
   return (
     <DashboardClient
       user={{ id: user.id, email: user.email ?? "" }}
@@ -70,6 +85,7 @@ export default async function DashboardPage() {
       initialMetrics={initialMetrics}
       latestMetric={latestMetric}
       triageReports={triageReports}
+      initialMeds={initialMeds}
     />
   );
 }

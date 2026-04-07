@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { predicted_class, confidence, probabilities, inference_ms, waveform_data, audio_duration } = body;
+  const { predicted_class, confidence, probabilities, inference_ms, waveform_data, audio_duration, cough_count, hoarseness_index, breathing_duration_secs } = body;
   if (!predicted_class || confidence == null) {
     return NextResponse.json({ error: "predicted_class and confidence required" }, { status: 400 });
   }
@@ -32,6 +32,9 @@ export async function POST(request: NextRequest) {
       inference_ms: inference_ms ?? null,
       waveform_data: waveform_data ?? [],
       audio_duration: audio_duration ?? null,
+      cough_count: cough_count ?? null,
+      hoarseness_index: hoarseness_index ?? null,
+      breathing_duration_secs: breathing_duration_secs ?? null,
     })
     .select()
     .single();

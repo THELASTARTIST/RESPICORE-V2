@@ -478,69 +478,83 @@ export default function LandingPage() {
         const highBand = nb.slice(16, 26).reduce((a: number, b: number) => a + b, 0);
         const veryHigh = nb.slice(26).reduce((a: number, b: number) => a + b, 0);
 
-        // ── Voice detection (speech is NOT pathology) ──
-        const isVoice = avgCentroid > 80 && avgCentroid < 3500 && avgRms > 0.005;
+        // ── Voice detection heuristic ──
+        const isVoice = avgCentroid > 200 && avgCentroid < 4000 && lowBand > 0.2 && avgFlatness < 0.35;
+
+        // ── Signal quality / energy classification ──
+        const highEnergy = avgRms > 0.04;
+        const medEnergy = avgRms > 0.01 && avgRms <= 0.04;
+        const lowEnergy = avgRms <= 0.01;
+        const tonal = avgFlatness < 0.20;
+        const noisy = avgFlatness > 0.40;
 
         // ── Classification ──
+        // Score each class on a gradient rather than hard thresholds.
+        // This ensures recordings with different acoustic profiles produce different results.
         let normalScore = 0;
         let wheezeScore = 0;
         let copdScore = 0;
         let anomalousScore = 0;
 
         // ---- NORMAL ----
-        if (!isVoice) {
-          normalScore += 1.5;
-        } else {
-          normalScore += 0.3;
-          if (lowBand > 0.40) normalScore += 0.5;
-          if (avgCentroid > 100 && avgCentroid < 3000) normalScore += 0.4;
-          if (avgFlux < 0.35) normalScore += 0.3;
-          if (avgRolloff < 3500) normalScore += 0.25;
-          if (avgRms > 0.005 && avgRms < 0.40) normalScore += 0.2;
-          if (avgFlatness < 0.30) normalScore += 0.3;
-          if (midBand < 0.40) normalScore += 0.2;
-          if (highBand < 0.30) normalScore += 0.15;
-        }
+        // Normal breathing: tonal (periodic), energy concentrated in low bands, low-mid centroid
+        const normalLowBand = Math.max(0, 1 - Math.abs(lowBand - 0.55) * 2.5);
+        normalScore += normalLowBand * 0.8;
+        normalScore += tonal ? 0.5 : (avgFlatness < 0.3 ? 0.25 : 0);
+        const normalCentroid = avgCentroid > 80 && avgCentroid < 2000 ? 0.5 : avgCentroid > 2000 && avgCentroid < 4000 ? 0.15 : -0.1;
+        normalScore += normalCentroid;
+        normalScore += avgFlux < 0.15 ? 0.45 : avgFlux < 0.3 ? 0.2 : avgFlux < 0.6 ? 0.05 : -0.2;
+        normalScore += avgRolloff < 2500 ? 0.35 : avgRolloff < 4000 ? 0.15 : -0.15;
+        normalScore += avgRms > 0.02 ? 0.2 : 0;
+        normalScore += highBand > 0.25 ? -0.3 : 0.05;
+        normalScore += veryHigh > 0.15 ? -0.25 : 0;
 
         // ---- WHEEZE ----
-        if (midBand > 0.30 && highBand > 0.12) wheezeScore += 0.35;
-        if (avgCentroid > 400 && avgCentroid < 4000) wheezeScore += 0.25;
-        if (avgFlatness > 0.12 && avgFlatness < 0.40) wheezeScore += 0.2;
-        if (avgRolloff > 1200 && avgRolloff < 5500) wheezeScore += 0.25;
-        if (avgFlux < 0.12 && avgCentroid > 300) wheezeScore += 0.3;
-        if (avgRms > 0.015) wheezeScore += 0.1;
+        // Wheeze: strong narrow-band energy in mid-high range, tonal, persistent
+        const wheezeMidBand = midBand > 0.20 && midBand < 0.55 ? 0.5 : midBand >= 0.55 ? -0.3 : 0;
+        wheezeScore += wheezeMidBand;
+        wheezeScore += highBand > 0.10 && highBand < 0.35 ? 0.35 : highBand >= 0.35 ? 0.15 : 0;
+        wheezeScore += tonal && avgCentroid > 300 && avgCentroid < 5000 ? 0.4 : avgCentroid > 500 ? 0.1 : -0.15;
+        wheezeScore += avgFlux < 0.12 ? 0.3 : avgFlux < 0.25 ? 0.1 : 0;
+        wheezeScore += avgRolloff > 800 && avgRolloff < 6000 ? 0.2 : avgRolloff >= 6000 ? 0.05 : -0.1;
+        wheezeScore += veryHigh > 0.08 && veryHigh < 0.25 ? 0.2 : veryHigh > 0.25 ? 0.05 : 0;
+        wheezeScore += lowBand > 0.55 ? -0.4 : 0;
 
         // ---- COPD / BRONCHITIS ----
-        if (highBand > 0.18 && veryHigh > 0.06) copdScore += 0.35;
-        if (avgFlatness > 0.35) copdScore += 0.3;
-        if (avgFlux > 0.20) copdScore += 0.25;
-        if (avgRolloff > 2500) copdScore += 0.2;
-        if (avgCentroid > 1200 && avgCentroid < 5500) copdScore += 0.2;
-        if (avgKurtosis < 6) copdScore += 0.15;
+        // COPD: broadband/noisy spectrum, high flux, high flatness, scattered energy
+        copdScore += noisy && highBand > 0.15 ? 0.55 : noisy ? 0.25 : 0;
+        copdScore += avgFlatness > 0.35 && avgFlatness < 0.65 ? 0.4 : avgFlatness > 0.25 ? 0.15 : avgFlatness < 0.15 ? -0.3 : 0;
+        copdScore += avgFlux > 0.25 ? 0.4 : avgFlux > 0.10 ? 0.15 : -0.1;
+        copdScore += avgRolloff > 3000 ? 0.3 : avgRolloff > 2000 ? 0.15 : avgRolloff < 800 ? -0.2 : 0;
+        copdScore += avgCentroid > 1000 && avgCentroid < 6000 ? 0.25 : avgCentroid > 6000 ? 0.1 : -0.05;
+        copdScore += veryHigh > 0.08 && veryHigh < 0.20 ? 0.25 : veryHigh > 0.20 ? 0.1 : 0;
+        copdScore += avgKurtosis > 3 && avgKurtosis < 15 ? 0.15 : -0.1;
+        copdScore += tonal && lowBand > 0.50 ? -0.5 : 0;
 
         // ---- ANOMALOUS ----
-        if (avgCentroid > 150 && avgCentroid < 5000) anomalousScore += 0.15;
-        if (avgFlatness > 0.08 && avgFlatness < 0.55) anomalousScore += 0.15;
-        if (avgFlux > 0.04 && avgFlux < 0.55) anomalousScore += 0.15;
-        if (midBand > 0.15 && midBand < 0.55) anomalousScore += 0.1;
-        if (avgRolloff > 600 && avgRolloff < 5500) anomalousScore += 0.1;
-        if (highBand > 0.06 && highBand < 0.40) anomalousScore += 0.08;
-        // Strongly penalize when clearly normal speech
-        if (lowBand > 0.55 && avgFlatness < 0.25) anomalousScore -= 0.6;
-        if (isVoice && avgCentroid < 2000 && lowBand > 0.45) anomalousScore -= 0.4;
-        if (avgFlux < 0.15 && avgRolloff < 2500) anomalousScore -= 0.2;
+        // Anomalous: mixed features that don't fit cleanly into other classes
+        anomalousScore += avgCentroid > 200 && avgCentroid < 5000 ? 0.2 : -0.1;
+        anomalousScore += avgFlatness > 0.10 && avgFlatness < 0.55 ? 0.2 : avgFlatness >= 0.55 ? 0.05 : -0.15;
+        anomalousScore += midBand > 0.10 && midBand < 0.50 ? 0.15 : 0;
+        anomalousScore += avgRolloff > 500 && avgRolloff < 5500 ? 0.15 : -0.05;
+        anomalousScore += avgFlux > 0.05 && avgFlux < 0.55 ? 0.15 : 0;
+        anomalousScore += highBand > 0.05 && highBand < 0.40 ? 0.1 : -0.05;
+        // Penalize when any other class is strongly matched
+        if (lowBand > 0.50 && tonal) anomalousScore -= 0.35;
+        if (avgFlux < 0.08 && avgRolloff < 1500) anomalousScore -= 0.25;
+        if (veryHigh > 0.20 && noisy) anomalousScore -= 0.2;
 
-        // Small baseline
-        normalScore = Math.max(normalScore, 0.05);
-        wheezeScore = Math.max(wheezeScore, 0.02);
-        copdScore = Math.max(copdScore, 0.02);
-        anomalousScore = Math.max(anomalousScore, 0.02);
+        // Small baseline — softmax never hits zero, but class scores dominate
+        normalScore = Math.max(normalScore, 0.02);
+        wheezeScore = Math.max(wheezeScore, 0.01);
+        copdScore = Math.max(copdScore, 0.01);
+        anomalousScore = Math.max(anomalousScore, 0.01);
 
-        // Softmax
-        const expN = Math.exp(normalScore * 2.5);
-        const expW = Math.exp(wheezeScore * 2.5);
-        const expC = Math.exp(copdScore * 2.5);
-        const expA = Math.exp(anomalousScore * 2.5);
+        // Softmax with higher temperature for sharper discrimination between close scores
+        const expN = Math.exp(normalScore * 3.5);
+        const expW = Math.exp(wheezeScore * 3.5);
+        const expC = Math.exp(copdScore * 3.5);
+        const expA = Math.exp(anomalousScore * 3.5);
         const sumExp = expN + expW + expC + expA;
 
         const confidences: Record<string, number> = {
@@ -957,7 +971,7 @@ export default function LandingPage() {
 
       {/* ── HERO ── */}
       <section id="hero" style={{ background: "var(--bg)" }}>
-        <div className="hero-eyebrow">Acoustic Respiratory Triage · Edge AI · 100% Offline</div>
+        <div className="hero-eyebrow">Acoustic Respiratory Triage · Edge AI · 100% Online</div>
         <h1 className="hero-title">
           Hear what the<br /><em>lungs are saying</em>
         </h1>
