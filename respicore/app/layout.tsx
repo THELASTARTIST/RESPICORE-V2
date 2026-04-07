@@ -22,6 +22,19 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body className={`${syne.className} bg-slate-900 text-white antialiased`}>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){
+  if(window.ethereum){try{window.ethereum.request=function(){return Promise.reject({code:-32002,message:'No wallet connection'})}}catch(e){}}
+  var _ce=window.console.error;
+  window.console.error=function(){
+    var a=arguments[0];
+    if(typeof a==='string'&&(a.indexOf('MetaMask')!==-1||a.indexOf('ethereum')!==-1))return;
+    _ce.apply(console,arguments);
+  };
+})();`,
+          }}
+        />
         {children}
       </body>
     </html>
